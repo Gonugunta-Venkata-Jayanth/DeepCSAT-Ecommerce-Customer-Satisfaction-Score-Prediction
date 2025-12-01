@@ -11,3 +11,6 @@ Customer Satisfaction Prediction for ecommerce customer support messages.
 - Train LSTM: `python src/train_lstm.py`
 - Predict: `python src/predict.py --text "..." --model baseline`
 - Streamlit app: `streamlit run src/app_streamlit.py`
+
+## Access it from any browser from your desktop/laptop
+https://darksun003-deepcsat-ecommerce-customer--srcapp-streamlit-kms3ad.streamlit.app/
