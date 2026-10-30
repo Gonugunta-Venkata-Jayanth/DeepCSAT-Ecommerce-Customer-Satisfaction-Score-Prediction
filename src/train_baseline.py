@@ -1,77 +1,81 @@
-# src/train_lstm.py
+# src/train_baseline.py
+"""Train the TF-IDF + Logistic Regression baseline used by predict.py / the Streamlit app.
+
+Run from the repository root:
+    python src/train_baseline.py
+
+Saves:
+    models/tfidf_vectorizer.pkl   (TfidfVectorizer, unigrams + bigrams, 20k features)
+    models/lr_model.pkl           (LogisticRegression on the binary target CSAT >= 4)
+    models/baseline_metrics.json  (validation and test metrics from this run)
+"""
+import json
 import os
-import numpy as np
+
 import joblib
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, Bidirectional, LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+
 from data_utils import load_data, prepare_dataset
 
-# --- MANUAL COLUMN NAMES (for your dataset) ---
+# --- Column names in data/eCommerce_Customer_support_data.csv ---
 TEXT_COL = "Customer Remarks"
 LABEL_COL = "CSAT Score"
-# ------------------------------------------------
+# -----------------------------------------------------------------
 
 DATA_PATH = os.path.join('data', 'eCommerce_Customer_support_data.csv')
 MODEL_DIR = 'models'
-os.makedirs(MODEL_DIR, exist_ok=True)
+RANDOM_STATE = 42
 
-def build_model(vocab_size, maxlen, embedding_dim=128):
-    model = Sequential([
-        Embedding(vocab_size, embedding_dim, input_length=maxlen),
-        Bidirectional(LSTM(128, return_sequences=False)),
-        Dropout(0.5),
-        Dense(64, activation='relu'),
-        Dropout(0.3),
-        Dense(1, activation='sigmoid')
-    ])
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    return model
+
+def evaluate(name, clf, X, y):
+    preds = clf.predict(X)
+    metrics = {
+        'accuracy': round(float(accuracy_score(y, preds)), 4),
+        'macro_f1': round(float(f1_score(y, preds, average='macro')), 4),
+        'f1_not_satisfied': round(float(f1_score(y, preds, pos_label=0)), 4),
+        'f1_satisfied': round(float(f1_score(y, preds, pos_label=1)), 4),
+        'confusion_matrix': confusion_matrix(y, preds).tolist(),
+        'n': int(len(y)),
+    }
+    print(f"\n=== {name} ===")
+    print(classification_report(y, preds, target_names=['not satisfied (0)', 'satisfied (1)'], digits=4))
+    print("Confusion matrix [[TN, FP], [FN, TP]]:", metrics['confusion_matrix'])
+    return metrics
+
 
 def main():
     print(f"Loading data from: {DATA_PATH}")
     print(f"Using text column: {TEXT_COL}, label column: {LABEL_COL}")
-
     df = load_data(DATA_PATH, text_cols=[TEXT_COL], label_col=LABEL_COL)
-    X_train, X_val, X_test, y_train, y_val, y_test = prepare_dataset(df)
-    y_train = y_train.values
-    y_val = y_val.values
-    y_test = y_test.values
 
-    max_vocab = 20000
-    maxlen = 200
+    # Same cleaning, CSAT >= 4 -> 1 binarisation and stratified 75/15/10 split as train_lstm.py
+    X_train, X_val, X_test, y_train, y_val, y_test = prepare_dataset(df, random_state=RANDOM_STATE)
+    print(f"Rows with remarks: {len(df)} | train {len(X_train)} / val {len(X_val)} / test {len(X_test)}")
 
-    tokenizer = Tokenizer(num_words=max_vocab, oov_token='<OOV>')
-    tokenizer.fit_on_texts(X_train)
-    X_train_seq = pad_sequences(tokenizer.texts_to_sequences(X_train), maxlen=maxlen)
-    X_val_seq = pad_sequences(tokenizer.texts_to_sequences(X_val), maxlen=maxlen)
-    X_test_seq = pad_sequences(tokenizer.texts_to_sequences(X_test), maxlen=maxlen)
+    tfidf = TfidfVectorizer(max_features=20000, ngram_range=(1, 2))
+    X_train_tfidf = tfidf.fit_transform(X_train)
 
-    print("Training Bi-LSTM model...")
-    model = build_model(max_vocab, maxlen)
+    clf = LogisticRegression(max_iter=200)
+    clf.fit(X_train_tfidf, y_train)
 
-    ckpt_path = os.path.join(MODEL_DIR, 'lstm_model.h5')
-    callbacks = [
-        ModelCheckpoint(ckpt_path, save_best_only=True, monitor='val_accuracy', mode='max'),
-        EarlyStopping(monitor='val_accuracy', patience=4, restore_best_weights=True)
-    ]
+    val_metrics = evaluate('Validation', clf, tfidf.transform(X_val), y_val)
+    test_metrics = evaluate('Test', clf, tfidf.transform(X_test), y_test)
+    majority = round(float(max(y_test.mean(), 1 - y_test.mean())), 4)
+    print(f"\nMajority-class accuracy on test (always predict the most common class): {majority:.4f}")
 
-    history = model.fit(
-        X_train_seq, y_train,
-        epochs=10,
-        batch_size=64,
-        validation_data=(X_val_seq, y_val),
-        callbacks=callbacks,
-        verbose=1
-    )
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    joblib.dump(tfidf, os.path.join(MODEL_DIR, 'tfidf_vectorizer.pkl'))
+    joblib.dump(clf, os.path.join(MODEL_DIR, 'lr_model.pkl'))
+    with open(os.path.join(MODEL_DIR, 'baseline_metrics.json'), 'w', encoding='utf-8') as fh:
+        json.dump({'model': 'TF-IDF (1-2 grams, 20k features) + LogisticRegression(max_iter=200)',
+                   'target': 'CSAT Score >= 4 -> satisfied (1), else 0',
+                   'split': 'stratified 75/15/10, random_state=42',
+                   'validation': val_metrics, 'test': test_metrics,
+                   'test_majority_class_accuracy': majority}, fh, indent=2)
+    print(f"\n✅ Saved tfidf_vectorizer.pkl, lr_model.pkl and baseline_metrics.json to: {MODEL_DIR}")
 
-    loss, acc = model.evaluate(X_test_seq, y_test)
-    print(f"✅ Test accuracy: {acc:.4f}")
-
-    joblib.dump(tokenizer, os.path.join(MODEL_DIR, 'tokenizer.pkl'))
-    print(f"✅ Model and tokenizer saved to: {MODEL_DIR}")
 
 if __name__ == '__main__':
     main()
