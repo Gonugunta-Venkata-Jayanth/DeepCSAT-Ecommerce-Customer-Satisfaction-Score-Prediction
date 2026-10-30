@@ -9,8 +9,6 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?logo=streamlit&logoColor=white)
 ![Dev Container](https://img.shields.io/badge/Dev%20Container-Codespaces-24292F?logo=github&logoColor=white)
 
-**Live demo (Streamlit Community Cloud):** https://darksun003-deepcsat-ecommerce-customer--srcapp-streamlit-kms3ad.streamlit.app/
-
 ---
 
 ## ✨ Features
@@ -70,12 +68,13 @@ DeepCSAT-Ecommerce-Customer-Satisfaction-Score-Prediction/
 │   └── tokenizer.pkl              # Keras tokenizer for the Bi-LSTM
 ├── src/
 │   ├── data_utils.py              # Loading, cleaning, label binarisation, splits
-│   ├── train_baseline.py          # Baseline training entry point (see note below)
+│   ├── train_baseline.py          # TF-IDF + Logistic Regression training
 │   ├── train_lstm.py              # Bi-LSTM training
 │   ├── predict.py                 # predict_baseline / predict_lstm + CLI
 │   └── app_streamlit.py           # Streamlit UI
 ├── DeepCSAT – Ecommerce.pptx      # Project brief / dataset overview slides
-├── requirements.txt
+├── requirements.txt               # Runtime dependencies
+├── requirements-dev.txt           # + JupyterLab / Notebook for exploration
 └── README.md
 ```
 
@@ -83,7 +82,9 @@ DeepCSAT-Ecommerce-Customer-Satisfaction-Score-Prediction/
 
 `data/eCommerce_Customer_support_data.csv` covers one month of customer-support interactions on an e-commerce platform ("Shopzilla"). It has 20 columns, including channel, category, sub-category, `Customer Remarks`, order and response timestamps, agent / supervisor / manager, tenure bucket, shift and `CSAT Score` (1–5).
 
-- 85,907 rows in total; 28,756 of them have non-empty `Customer Remarks` (rows without remarks are dropped before training).
+- **Anonymised staff columns:** `Agent_name`, `Supervisor` and `Manager` hold stable pseudonymous IDs (`Agent_0001`–`Agent_1371`, `Supervisor_001`–`Supervisor_040`, `Manager_01`–`Manager_06`) instead of personal names. Each original name maps to exactly one ID, so per-agent / per-team analysis still works.
+
+- 85,907 rows in total; 28,742 of them have non-empty `Customer Remarks` (rows without remarks are dropped before training).
 - The CSAT distribution is skewed towards 5, so roughly three quarters of the usable rows fall in the "satisfied" class.
 
 ## 🚀 Getting Started
@@ -100,6 +101,7 @@ cd DeepCSAT-Ecommerce-Customer-Satisfaction-Score-Prediction
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+# optional, for notebooks: pip install -r requirements-dev.txt
 ```
 
 > Run every command from the **repository root**: the scripts read `data/` and `models/` with relative paths.
@@ -122,17 +124,29 @@ The output is `[1]` (satisfied) or `[0]` (not satisfied).
 ### Retrain the models
 
 ```bash
-python src/train_lstm.py        # trains the Bi-LSTM, saves models/lstm_model.h5 + models/tokenizer.pkl
+python src/train_baseline.py    # TF-IDF + Logistic Regression -> models/tfidf_vectorizer.pkl + models/lr_model.pkl
+python src/train_lstm.py        # Bi-LSTM -> models/lstm_model.h5 + models/tokenizer.pkl
 ```
 
-> **Note:** `src/train_baseline.py` currently contains the same Bi-LSTM training code as `train_lstm.py`. The TF-IDF + Logistic Regression artifacts used by the app (`models/tfidf_vectorizer.pkl`, `models/lr_model.pkl`) are shipped pre-trained in `models/`.
+Both scripts use the same cleaning, `CSAT >= 4` target and stratified 75 / 15 / 10 split (`random_state=42`) and overwrite the files in `models/`. `train_baseline.py` prints a classification report and confusion matrix for the validation and test sets and also writes them to `models/baseline_metrics.json` (not committed).
 
-The training script prints the test-set accuracy at the end of each run.
+## 📊 Results: TF-IDF + Logistic Regression baseline
+
+Measured by running `python src/train_baseline.py` on 2026-10-30 (scikit-learn 1.9.1, NLTK 3.10 English stopwords). 28,742 rows with remarks → 21,556 train / 4,311 validation / 2,875 test.
+
+| Split | Accuracy | Macro F1 | F1 not satisfied | F1 satisfied |
+|---|---|---|---|---|
+| Validation | 0.8613 | 0.7757 | 0.6371 | 0.9143 |
+| Test | 0.8647 | 0.7809 | 0.6454 | 0.9164 |
+
+- Test confusion matrix `[[TN, FP], [FN, TP]]` = `[[354, 293], [96, 2132]]`: recall is 0.957 for satisfied but only 0.547 for not satisfied.
+- Always predicting "satisfied" would already score 0.775 accuracy on the test set, so macro F1 is the more honest number.
+- The pre-trained baseline shipped in `models/` scores 0.8616 accuracy / 0.7757 macro F1 on the same test split. (It was trained before this script existed, so it may have seen some of these rows during training.)
+- The Bi-LSTM was not retrained or re-evaluated here; no LSTM metrics are reported.
 
 ## 🔮 Future Work
 
-- Restore a dedicated TF-IDF + Logistic Regression training script in `train_baseline.py`.
-- Record evaluation results (accuracy, precision/recall/F1, confusion matrix) for both models in the repo.
+- Record evaluation results for the Bi-LSTM alongside the baseline numbers above.
 - Use the structured columns (channel, category, handling time, agent tenure, shift) alongside the text, as the project brief's ANN objective describes.
 - Handle class imbalance (class weights or resampling) and predict the full 1–5 score, not just a binary label.
 - Cache loaded models in the Streamlit app (`st.cache_resource`) so they aren't reloaded on every prediction.
