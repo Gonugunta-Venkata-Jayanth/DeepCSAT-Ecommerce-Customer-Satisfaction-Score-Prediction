@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
 .env
-models/
-*.h5
-*.pkl
 .ipynb_checkpoints/
 .DS_Store
+
+# Trained artifacts in models/ (lr_model.pkl, tfidf_vectorizer.pkl, lstm_model.h5,
+# tokenizer.pkl) are committed on purpose so the Streamlit app works out of the box.
+# Metrics written by local training runs are not:
+models/baseline_metrics.json
