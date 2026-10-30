@@ -1,8 +1,6 @@
 import os
 import joblib
 import argparse
-import numpy as np
-from tensorflow.keras.models import load_model
 from data_utils import basic_clean
 
 MODEL_DIR = 'models'
@@ -13,6 +11,8 @@ def load_baseline():
     return tfidf, clf
 
 def load_lstm():
+    # Imported lazily so the TF-IDF baseline works without TensorFlow installed
+    from tensorflow.keras.models import load_model
     tokenizer = joblib.load(os.path.join(MODEL_DIR, 'tokenizer.pkl'))
     model = load_model(os.path.join(MODEL_DIR, 'lstm_model.h5'))
     return tokenizer, model
